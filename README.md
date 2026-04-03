@@ -20,8 +20,10 @@ The ```utils/spatial_functions.py``` script contains helper functions to transfo
 
 ## Usage Example
 
+Modify ```usage_example.py``` to run these functions on your own data.
+
 ### Creating feature data and "presence" data
-To test these functions, I created a dataset of fake site locations (that way I could share images of site distributions without concern about site sensitivity) on top of real environmental data. In theory, other users of this repository would have real data to which they could apply these functions. However, I still explain here in detail how I generated the fake data in case it might be useful for others. All initial data preparation was completed in QGIS (analagous functions exist for all these steps in ArcGIS Pro). Skip to **Read in Data** if your data is ready to go.
+To test these functions, I created a dataset of fake site locations (that way I could share images of site distributions without concern about site sensitivity) on top of real environmental data. In theory, other users of this repository would have real data to which they could apply these functions. However, I still explain here in detail how I generated the fake data in case it might be useful for others. All initial data preparation was completed in QGIS (analogous functions exist for all these steps in ArcGIS Pro). Skip to **Read in Data** if your data is ready to go.
 
 #### Features
 I selected a study area, downloaded 10 m DEMs covering that study area, and merged them into a single raster (data available from the [USGS National Map Data Downloader](https://apps.nationalmap.gov/downloader/); look for 1/3 arc second data under the 3D Elevation Program header). Using the raster terrain analysis tools in QGIS, I then generated a slope raster, aspect raster, and terrain ruggedness index raster with this merged DEM as the input. Using the [r.stream.extract](https://grass.osgeo.org/grass78/manuals/r.stream.extract.html) tool in the GRASS toolbox, I generated a raster of all streams with an initiation threshold of 1000 pixels, reclassified the raster so each unique stream was represented by pixels with a value of 1, and used the Proximity (Raster Analysis) tool in the GDAL Raster Analysis toolbox to generate a raster representing (Euclidean) distance to each of these stream pixels. I also downloaded the 800 m resolution [PRISM climate normals](https://prism.oregonstate.edu/normals/) precipitation data and clipped it to the same study area. These rasters all represent landscape features that could, in theory, have influenced the placement of an archaeological site. 
@@ -54,6 +56,10 @@ absence = rasterio.open('test-data/Presence.tif').read(1)
 #etc.
 ```
 
+<img src="figs/Figure_1.jpg" width="400">
+
+The figure above shows the six analysis rasters used to train the random forest model.
+
 ### Build DataFrame from rasters
 The function ```build_pa_df()``` uses the presence and absence rasters to get values associated with each feature for each presence or absence cell and turns that into a single DataFrame. Each row in the DataFrame is a single observation.
 
@@ -72,10 +78,10 @@ The function ```train_predict_results()``` instantiates the RandomForestClassifi
 rforest, xtest, ytest = train_predict_results(final, ['Aspect', 'Lg_site_dist', 'PRCP', 'Slope', 'Stream_dist', 'TRI'])
 ```
 
-This function returns the trained classifier (```rforest```) and the testing dataset for additional metric calculations or for examining feature importance.
+This function returns the trained classifier (```rforest```) and the testing dataset for additional metric calculations or for examining feature importance. In this example, I am using the default parameters in the RandomForestClassifier. The function is written to also take any of the other keyword arguments associated with that class.
 
 ### Predict on new data
-After training, this trained classifier can be applied to new data. The function ```predict_on_mb_raster()``` takes the new multiband raster and applies the classifier to each cell in a vectorized manner, returning a single array with likely presence represented as "1" and absence as "0."
+After training, this trained classifier can be applied to new data. The function ```predict_on_mb_raster()``` takes the new multi-band raster and applies the classifier to each cell in a vectorized manner, returning a single array with likely presence represented as "1" and absence as "0."
 
 ```
 #rforest is the trained classifier - the output of train_predict_results()
@@ -90,16 +96,22 @@ The function ```predict_on_rasters()``` works with single-band rasters. In this 
 prediction = predict_on_rasters(read_raster_list_ordered = [aspect, cost_large_site, prcp, slope, stream_dist, tri], classifier = rforest)
 ```
 
+The larger the prediction raster, the longer this process will take. Even a relatively small raster (1.5 x 1.5 km in this case, or 150 x 150 pixels) will have lots of observations (22500, in this case). On my computer, which has lots of installed RAM and a high-performance processor, this took less than a minute. Even scaling this up to just a 10 km x 10 km raster would yield 1 million observations. Scaling up to a 30 m raster would help apply over larger geographic areas and may still be appropriate for certain research questions.
+
 ### Save output
 The function ```save_raster_prediction()``` uses rasterio to save the output prediction array as a GeoTIFF with the same extent and resolution as the input:
 
 ```
 prediction_raster = 'test-data/Area_to_analyze.tif'
 prediction_out = 'test-data/Prediction.tif'
-save_raster_prediction(prediction_raster, prediction_out)
+save_raster_prediction(prediction_raster, prediction_out, prediction)
 ```
 
 These steps are wrapped in a function for ease of use, but this part is relatively straightforward and follows the typical procedure for exporting a raster from an array (see [rasterio documentation](https://rasterio.readthedocs.io/en/stable/topics/writing.html)).
+
+<img src="figs/Figure_2.jpg" width="400">
+
+In the example output above, we can see qualitatively that the model is making decisions based on terrain variables. Sites seems to be avoiding certain aspects. This also starts to show some of the potential limitations. Sites in the input layer were not clustered together so closely. Adding a raster that shows proximity to the nearest outlying site might help make this better represent the actual site density in the input layer.
 
 ### Optional: Examining feature importance
 There are a couple ways to examine how the random forest classifier is making its predictions. We can look at individual decision trees using:
@@ -118,3 +130,7 @@ But we can also look at the relative importance of different features in the fin
 perm = permutation_importance(rforest, xtest, ytest) #By default, this runs five permutations for each feature
 ```
 Features that change the score more than others are more important to the decisions the classifier is making.
+
+<img src="figs/Figure_3.jpg" width="700">
+
+This result confirms what we saw qualitatively in the output map: features like aspect, slope, and terrain ruggedness were the most important for the final classifications. 
